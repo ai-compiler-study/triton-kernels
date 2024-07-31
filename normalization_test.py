@@ -16,6 +16,12 @@ def layer_norm_modulation_torch(x: torch.Tensor, scale: torch.Tensor, shift: tor
     return modulate(x, scale=scale, shift=shift)
 
 
+@torch.compile
+def layer_norm_modulation_torch_compile(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
+    x = F.layer_norm(x, normalized_shape=(x.shape[-1],))
+    return modulate(x, scale=scale, shift=shift)
+
+
 def test_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, device="cuda"):
     # create data
     x = torch.randn(batch_size, seq_len, embed_dim).to(device)
@@ -33,9 +39,9 @@ def test_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, device="cu
         x_names=["embed_dim"],
         x_vals=[512 * i for i in range(2, 32)],
         line_arg="provider",
-        line_vals=["triton", "torch"],
-        line_names=["Triton", "Torch"],
-        styles=[("blue", "-"), ("green", "-")],
+        line_vals=["triton", "torch_compile", "torch"],
+        line_names=["triton", "torch_compile", "torch"],
+        styles=[("blue", "-"), ("green", "-"), ("green", "--")],
         ylabel="GB/s",
         plot_name="layer-norm-modulation",
         args={"batch_size": 16, "seq_len": 1024, "dtype": torch.float32},
@@ -53,6 +59,9 @@ def bench_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, provider,
 
         if provider == "triton":
             return layer_norm_modulation(x, scale, shift)
+
+        if provider == "torch_compile":
+            return layer_norm_modulation_torch_compile(x, scale, shift)
 
         if provider == "torch":
             return layer_norm_modulation_torch(x, scale, shift)
