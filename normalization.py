@@ -93,7 +93,7 @@ class _layer_norm_modulation(torch.autograd.Function):
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
-        ctx.epx = eps
+        ctx.eps = eps
         return y
 
     def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
