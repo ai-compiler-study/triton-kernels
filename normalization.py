@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton.language.math import rsqrt
 
 
 @triton.jit
@@ -52,7 +53,6 @@ def _layer_norm_modulation_fwd(
         b = tl.load(B + cols, mask=mask)
         x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
         x_hat = (x - mean) * rstd
-        x_hat = x_hat
         y = x_hat * (1 + w) + b
         # Write output
         tl.store(Y + cols, y, mask=mask)
@@ -103,3 +103,85 @@ class _layer_norm_modulation(torch.autograd.Function):
 
 
 layer_norm_modulation = _layer_norm_modulation.apply
+
+
+@triton.jit
+def _rms_norm_fwd(
+    X,  # pointer to the input
+    Y,  # pointer to the output
+    W,  # pointer to the weights
+    Mean,  # pointer to the mean
+    Rstd,  # pointer to the 1/std
+    stride,  # how much to increase the pointer when moving by 1 row
+    N,  # number of columns in X
+    eps,  # epsilon to avoid division by zero
+    BLOCK_SIZE: tl.constexpr,
+):
+    # Map the program id to the row of X and Y it should compute.
+    row = tl.program_id(0)
+    Y += row * stride
+    X += row * stride
+    # Compute mean
+    mean = 0
+    _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
+        _mean += a * a
+    mean = tl.sum(_mean, axis=0) / N
+    # Compute rrms
+    rstd = tl.rsqrt(mean + eps)
+    tl.store(Mean + row, mean)
+    tl.store(Rstd + row, rstd)
+
+    # Normalize and apply linear transformation
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        mask = cols < N
+        w = tl.load(W + cols, mask=mask)
+        x = tl.load(X + cols, mask=mask, other=0.0)
+        y = (x * rstd).to(tl.float32) * w
+        # Write output
+        tl.store(Y + cols, y, mask=mask)
+
+
+class _rms_norm(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, scale: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        assert x.shape[-1] == scale.shape[-1]
+        y = torch.empty_like(x)
+        x_arg = x.reshape(-1, x.shape[-1])
+        M, N = x_arg.shape
+        mean = torch.empty((M,), dtype=torch.float32, device=x.device)
+        rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
+        if N > BLOCK_SIZE:
+            raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
+        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+        _rms_norm_fwd[(M,)](
+            x_arg,
+            y,
+            scale,
+            mean,
+            rstd,
+            x_arg.stride(0),
+            N,
+            eps,
+            BLOCK_SIZE=BLOCK_SIZE,
+            num_warps=num_warps,
+            num_ctas=1,
+        )
+        ctx.save_for_backward(x, scale, mean, rstd)
+        ctx.BLOCK_SIZE = BLOCK_SIZE
+        ctx.num_warps = num_warps
+        ctx.eps = eps
+        return y
+
+    def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
+        # TODO: implement backward pass
+        x, s, m, r = ctx.saved_tensors
+        return x, s, None
+
+
+rms_norm = _rms_norm.apply

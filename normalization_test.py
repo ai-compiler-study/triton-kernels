@@ -7,7 +7,7 @@ import triton
 from normalization import layer_norm_modulation
 
 
-def modulate(x, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
+def modulate(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
