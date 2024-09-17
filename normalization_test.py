@@ -36,15 +36,15 @@ def test_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, device="cu
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=["embed_dim"],
-        x_vals=[512 * i for i in range(2, 32)],
+        x_names=["seq_len"],
+        x_vals=[256 * i for i in range(1, 17)],
         line_arg="provider",
         line_vals=["triton", "torch_compile", "torch"],
         line_names=["triton", "torch_compile", "torch"],
         styles=[("blue", "-"), ("green", "-"), ("green", "--")],
         ylabel="GB/s",
         plot_name="layer-norm-modulation",
-        args={"batch_size": 16, "seq_len": 1024, "dtype": torch.float32},
+        args={"batch_size": 4, "embed_dim": 3072, "dtype": torch.float32},
     )
 )
 def bench_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, provider, device="cuda"):

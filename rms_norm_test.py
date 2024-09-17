@@ -36,15 +36,15 @@ def test_rms_norm(batch_size, num_heads, seq_len, head_dim, dtype, device="cuda"
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=["head_dim"],
-        x_vals=[32 * i for i in range(1, 32)],
+        x_names=["seq_len"],
+        x_vals=[256 * i for i in range(1, 17)],
         line_arg="provider",
         line_vals=["triton", "torch_compile", "torch"],
         line_names=["triton", "torch_compile", "torch"],
         styles=[("blue", "-"), ("green", "-"), ("green", "--")],
         ylabel="GB/s",
         plot_name="rms-norm",
-        args={"batch_size": 16, "num_heads": 24, "seq_len": 2048, "dtype": torch.float32},
+        args={"batch_size": 4, "num_heads": 24, "head_dim": 128, "dtype": torch.float32},
     )
 )
 def bench_rms_norm(batch_size, num_heads, seq_len, head_dim, dtype, provider, device="cuda"):
