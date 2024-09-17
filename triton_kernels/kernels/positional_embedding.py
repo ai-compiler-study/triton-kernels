@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from utils import calculate_settings
+from triton_kernels.kernels.utils import calculate_settings
 
 
 @triton.jit

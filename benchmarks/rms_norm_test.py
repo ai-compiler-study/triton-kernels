@@ -2,24 +2,8 @@ import os
 
 import torch
 import triton
-from torch import Tensor
 
-from normalization import rms_norm
-
-
-def rms_norm_torch(x: Tensor, scale: Tensor) -> Tensor:
-    x_dtype = x.dtype
-    x = x.float()
-    rrms = torch.rsqrt(torch.mean(x**2, dim=-1, keepdim=True) + 1e-6)
-    return (x * rrms).to(dtype=x_dtype) * scale
-
-
-@torch.compile
-def rms_norm_torch_compile(x: Tensor, scale: Tensor) -> Tensor:
-    x_dtype = x.dtype
-    x = x.float()
-    rrms = torch.rsqrt(torch.mean(x**2, dim=-1, keepdim=True) + 1e-6)
-    return (x * rrms).to(dtype=x_dtype) * scale
+from triton_kernels import rms_norm, rms_norm_torch, rms_norm_torch_compile
 
 
 def test_rms_norm(batch_size, num_heads, seq_len, head_dim, dtype, device="cuda"):

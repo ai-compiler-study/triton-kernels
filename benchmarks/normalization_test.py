@@ -4,22 +4,7 @@ import torch
 import torch.nn.functional as F
 import triton
 
-from normalization import layer_norm_modulation
-
-
-def modulate(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
-
-
-def layer_norm_modulation_torch(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
-    x = F.layer_norm(x, normalized_shape=(x.shape[-1],))
-    return modulate(x, scale=scale, shift=shift)
-
-
-@torch.compile
-def layer_norm_modulation_torch_compile(x: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor) -> torch.Tensor:
-    x = F.layer_norm(x, normalized_shape=(x.shape[-1],))
-    return modulate(x, scale=scale, shift=shift)
+from triton_kernels import layer_norm_modulation, layer_norm_modulation_torch, layer_norm_modulation_torch_compile
 
 
 def test_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, device="cuda"):
