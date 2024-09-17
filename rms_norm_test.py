@@ -32,6 +32,7 @@ def test_rms_norm(batch_size, num_heads, seq_len, head_dim, dtype, device="cuda"
     y_ref = rms_norm_torch(x, scale).to(dtype)
     # compare
     assert torch.allclose(y_tri, y_ref, atol=1e-5, rtol=0)
+    print("TEST PASS")
 
 
 @triton.testing.perf_report(

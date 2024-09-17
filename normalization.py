@@ -1,7 +1,24 @@
 import torch
 import triton
 import triton.language as tl
-from triton.language.math import rsqrt
+
+
+def calculate_settings(n):
+    # reference: https://github.com/unslothai/unsloth
+    MAX_FUSED_SIZE = 65536
+    BLOCK_SIZE = triton.next_power_of_2(n)
+    if BLOCK_SIZE > MAX_FUSED_SIZE:
+        raise RuntimeError(
+            f"Cannot launch Triton kernel since n = {n} exceeds " f"the maximum CUDA blocksize = {MAX_FUSED_SIZE}."
+        )
+    num_warps = 4
+    if BLOCK_SIZE >= 32768:
+        num_warps = 32
+    elif BLOCK_SIZE >= 8192:
+        num_warps = 16
+    elif BLOCK_SIZE >= 2048:
+        num_warps = 8
+    return BLOCK_SIZE, num_warps
 
 
 @triton.jit
@@ -26,36 +43,21 @@ def _layer_norm_modulation_fwd(
     W += batch_idx * stride
     B += batch_idx * stride
     # Compute mean
-    mean = 0
-    _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        _mean += a
-    mean = tl.sum(_mean, axis=0) / N
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
+    x = tl.load(X + cols, mask=mask, other=0.0)
+    w = tl.load(W + cols, mask=mask, other=0.0)
+    b = tl.load(B + cols, mask=mask, other=0.0)
+    mean = tl.sum(x, axis=0) / N
     # Compute variance
-    _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        x = tl.where(cols < N, x - mean, 0.0)
-        _var += x * x
-    var = tl.sum(_var, axis=0) / N
-    rstd = 1 / tl.sqrt(var + eps)
+    var = tl.sum(x * x, axis=0) / N - mean * mean
+    rstd = tl.rsqrt(var + eps)
     # Write mean / rstd
     tl.store(Mean + row, mean)
     tl.store(Rstd + row, rstd)
     # Normalize and apply linear transformation
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        mask = cols < N
-        w = tl.load(W + cols, mask=mask)
-        b = tl.load(B + cols, mask=mask)
-        x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        x_hat = (x - mean) * rstd
-        y = x_hat * (1 + w) + b
-        # Write output
-        tl.store(Y + cols, y, mask=mask)
+    y = (x - mean) * rstd * (1 + w) + b
+    tl.store(Y + cols, y, mask=mask)
 
 
 class _layer_norm_modulation(torch.autograd.Function):
@@ -70,11 +72,7 @@ class _layer_norm_modulation(torch.autograd.Function):
         seq_len = M // batch_size
         mean = torch.empty((M,), dtype=torch.float32, device=x.device)
         rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
-        MAX_FUSED_SIZE = 65536 // x.element_size()
-        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
-        if N > BLOCK_SIZE:
-            raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
-        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+        BLOCK_SIZE, num_warps = calculate_settings(N)
         _layer_norm_modulation_fwd[(M,)](
             x_arg,
             y,
@@ -110,7 +108,6 @@ def _rms_norm_fwd(
     X,  # pointer to the input
     Y,  # pointer to the output
     W,  # pointer to the weights
-    Mean,  # pointer to the mean
     Rstd,  # pointer to the 1/std
     stride,  # how much to increase the pointer when moving by 1 row
     N,  # number of columns in X
@@ -122,27 +119,17 @@ def _rms_norm_fwd(
     Y += row * stride
     X += row * stride
     # Compute mean
-    mean = 0
-    _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        _mean += a * a
-    mean = tl.sum(_mean, axis=0) / N
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
+    x = tl.load(X + cols, mask=mask, other=0.0)
+    w = tl.load(W + cols, mask=mask, other=0.0)
+    mean = tl.sum(x * x, axis=0) / N
     # Compute rrms
     rstd = tl.rsqrt(mean + eps)
-    tl.store(Mean + row, mean)
     tl.store(Rstd + row, rstd)
-
     # Normalize and apply linear transformation
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        mask = cols < N
-        w = tl.load(W + cols, mask=mask)
-        x = tl.load(X + cols, mask=mask, other=0.0)
-        y = (x * rstd).to(tl.float32) * w
-        # Write output
-        tl.store(Y + cols, y, mask=mask)
+    y = x * rstd * w
+    tl.store(Y + cols, y, mask=mask)
 
 
 class _rms_norm(torch.autograd.Function):
@@ -150,20 +137,14 @@ class _rms_norm(torch.autograd.Function):
     def forward(ctx, x: torch.Tensor, scale: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         assert x.shape[-1] == scale.shape[-1]
         y = torch.empty_like(x)
-        x_arg = x.reshape(-1, x.shape[-1])
+        x_arg = x.view(-1, x.shape[-1])
         M, N = x_arg.shape
-        mean = torch.empty((M,), dtype=torch.float32, device=x.device)
         rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
-        MAX_FUSED_SIZE = 65536 // x.element_size()
-        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
-        if N > BLOCK_SIZE:
-            raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
-        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+        BLOCK_SIZE, num_warps = calculate_settings(N)
         _rms_norm_fwd[(M,)](
             x_arg,
             y,
             scale,
-            mean,
             rstd,
             x_arg.stride(0),
             N,
@@ -172,7 +153,7 @@ class _rms_norm(torch.autograd.Function):
             num_warps=num_warps,
             num_ctas=1,
         )
-        ctx.save_for_backward(x, scale, mean, rstd)
+        ctx.save_for_backward(x, scale, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
         ctx.eps = eps
@@ -180,7 +161,7 @@ class _rms_norm(torch.autograd.Function):
 
     def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
         # TODO: implement backward pass
-        x, s, m, r = ctx.saved_tensors
+        x, s, r = ctx.saved_tensors
         return x, s, None
 
 

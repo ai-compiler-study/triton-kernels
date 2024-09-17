@@ -29,9 +29,10 @@ def test_layer_norm_modulation(batch_size, seq_len, embed_dim, dtype, device="cu
     shift = torch.randn(batch_size, embed_dim).to(device)
     # forward pass
     y_tri = layer_norm_modulation(x, scale, shift)
-    y_ref = layer_norm_modulation_torch(x, scale, shift).to(dtype)
+    y_ref = layer_norm_modulation_torch(x, scale, shift)
     # compare
     assert torch.allclose(y_tri, y_ref, atol=1e-5, rtol=0)
+    print("TEST PASS")
 
 
 @triton.testing.perf_report(
