@@ -35,8 +35,8 @@ def test_apply_rope(batch_size, num_heads, seq_len, head_dim, dtype, device="cud
     q_ref, k_ref = apply_rope_torch(xq, xk, freqs_cis)
 
     # compare
-    assert torch.allclose(q_tri, q_ref, atol=1e-3, rtol=0)
-    assert torch.allclose(k_tri, k_ref, atol=1e-3, rtol=0)
+    assert torch.allclose(q_tri, q_ref, atol=1e-5, rtol=0)
+    assert torch.allclose(k_tri, k_ref, atol=1e-5, rtol=0)
     print("TEST PASS")
 
 

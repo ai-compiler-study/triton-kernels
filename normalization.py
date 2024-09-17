@@ -2,23 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
-
-def calculate_settings(n):
-    # reference: https://github.com/unslothai/unsloth
-    MAX_FUSED_SIZE = 65536
-    BLOCK_SIZE = triton.next_power_of_2(n)
-    if BLOCK_SIZE > MAX_FUSED_SIZE:
-        raise RuntimeError(
-            f"Cannot launch Triton kernel since n = {n} exceeds " f"the maximum CUDA blocksize = {MAX_FUSED_SIZE}."
-        )
-    num_warps = 4
-    if BLOCK_SIZE >= 32768:
-        num_warps = 32
-    elif BLOCK_SIZE >= 8192:
-        num_warps = 16
-    elif BLOCK_SIZE >= 2048:
-        num_warps = 8
-    return BLOCK_SIZE, num_warps
+from utils import calculate_settings
 
 
 @triton.jit
@@ -67,7 +51,7 @@ class _layer_norm_modulation(torch.autograd.Function):
         assert x.shape[-1] == weight.shape[-1] == bias.shape[-1]
         batch_size = x.shape[0]
         y = torch.empty_like(x)
-        x_arg = x.reshape(-1, x.shape[-1])
+        x_arg = x.view(-1, x.shape[-1])
         M, N = x_arg.shape
         seq_len = M // batch_size
         mean = torch.empty((M,), dtype=torch.float32, device=x.device)
