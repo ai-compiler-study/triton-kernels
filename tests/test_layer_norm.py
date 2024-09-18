@@ -17,8 +17,8 @@ from triton_kernels import layer_norm_modulation, layer_norm_modulation_torch
 def test_layer_norm_modulation(batch_size, seq_len, embed_dim, device):
     # create data
     x = torch.randn(batch_size, seq_len, embed_dim).to(device)
-    scale = torch.randn(batch_size, embed_dim).to(device)
-    shift = torch.randn(batch_size, embed_dim).to(device)
+    scale = torch.randn(batch_size, 1, embed_dim).to(device)
+    shift = torch.randn(batch_size, 1, embed_dim).to(device)
     # forward pass
     y_tri = layer_norm_modulation(x, scale, shift)
     y_ref = layer_norm_modulation_torch(x, scale, shift)

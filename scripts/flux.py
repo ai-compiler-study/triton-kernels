@@ -213,6 +213,55 @@ class SingleStreamBlock(nn.Module):
         return x + mod.gate * output
 
 
+class SingleStreamBlockCompiled(nn.Module):
+    """
+    A DiT block with parallel linear layers as described in
+    https://arxiv.org/abs/2302.05442 and adapted modulation interface.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        qk_scale: float | None = None,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_size
+        self.num_heads = num_heads
+        head_dim = hidden_size // num_heads
+        self.scale = qk_scale or head_dim**-0.5
+
+        self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        # qkv and mlp_in
+        self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim)
+        # proj and mlp_out
+        self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size)
+
+        self.norm = QKNorm(head_dim)
+
+        self.hidden_size = hidden_size
+        self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+
+        self.mlp_act = nn.GELU(approximate="tanh")
+        self.modulation = Modulation(hidden_size, double=False)
+
+    @torch.compile
+    def forward(self, x: Tensor, vec: Tensor, pe: Tensor) -> Tensor:
+        mod, _ = self.modulation(vec)
+        x_mod = (1 + mod.scale) * self.pre_norm(x) + mod.shift
+        qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
+
+        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        q, k = self.norm(q, k, v)
+
+        # compute attention
+        attn = attention(q, k, v, pe=pe)
+        # compute activation in mlp stream, cat again and run second linear layer
+        output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+        return x + mod.gate * output
+
+
 if __name__ == "__main__":
     hidden_size = 3072
     num_heads = 24
@@ -222,19 +271,54 @@ if __name__ == "__main__":
     batch_size = 1
     seq_len = 4336
 
+    device = "cuda"
+
     block = SingleStreamBlock(
         hidden_size=hidden_size,
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
     )
+    block_compiled = SingleStreamBlockCompiled(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        mlp_ratio=mlp_ratio,
+    )
+    block_compiled.load_state_dict(block.state_dict())
+    block = block.to(device)
+    block_compiled = block_compiled.to(device)
 
-    x = torch.randn(batch_size, seq_len, hidden_size)
-    vec = torch.randn(batch_size, hidden_size)
-    pe = torch.randn(batch_size, 1, seq_len, head_dim // 2, 2, 2)
+    x = torch.randn(batch_size, seq_len, hidden_size).to(device)
+    vec = torch.randn(batch_size, hidden_size).to(device)
+    pe = torch.randn(batch_size, 1, seq_len, head_dim // 2, 2, 2).to(device)
 
     out = block(x=x, vec=vec, pe=pe)
+    out_compiled = block_compiled(x=x, vec=vec, pe=pe)
 
-    print("x", x.shape, x.dtype)
-    print("vec", vec.shape, vec.dtype)
-    print("pe", pe.shape, pe.dtype)
-    print("out", out.shape, out.dtype)
+    torch.testing.assert_close(out, out_compiled, atol=1e-5, rtol=0)
+
+    # warmup
+    warmup_count = 5
+
+    for i in range(warmup_count):
+        out = block(x=x, vec=vec, pe=pe)
+    for i in range(warmup_count):
+        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
+
+    # run
+    run_count = 100
+
+    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    start.record()
+    for i in range(run_count):
+        out = block(x=x, vec=vec, pe=pe)
+    end.record()
+    torch.cuda.synchronize()
+    print(f"baseline block time: {start.elapsed_time(end):.2f} ms")
+
+    tart, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    start.record()
+    for i in range(run_count):
+        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
+    end.record()
+    torch.cuda.synchronize()
+    print(f"compiled block time: {start.elapsed_time(end):.2f} ms")

@@ -16,7 +16,7 @@ from triton_kernels import apply_rope, apply_rope_torch, apply_rope_torch_compil
         styles=[("blue", "-"), ("green", "-"), ("green", "--")],
         ylabel="GB/s",
         plot_name="apply-rope",
-        args={"batch_size": 16, "num_heads": 24, "head_dim": 128},
+        args={"batch_size": 4, "num_heads": 24, "head_dim": 128},
     )
 )
 def bench_apply_rope(batch_size, num_heads, seq_len, head_dim, provider, device="cuda"):

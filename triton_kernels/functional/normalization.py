@@ -4,7 +4,7 @@ from torch import Tensor
 
 
 def modulate(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale) + shift
 
 
 def layer_norm_modulation_torch(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:

@@ -16,7 +16,7 @@ pip install matplotlib pandas
 - LayerNorm + Modulation Kernel
   - `python ./benchmarks/layer_norm.py`
 - RMSNorm Kernel
-  - `python ./benchmarks/.py`
+  - `python ./benchmarks/rms_norm.py`
 - RoPE Kernel
   - `python ./benchmakrs/rope_test.py`
 
