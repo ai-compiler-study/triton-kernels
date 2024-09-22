@@ -4,16 +4,10 @@ import torch
 from triton_kernels import layer_norm_modulation, layer_norm_modulation_torch
 
 
-@pytest.mark.parametrize(
-    "batch_size, seq_len, embed_dim, device",
-    (
-        [16, 256, 1024, "cuda"],
-        [16, 512, 1024, "cuda"],
-        [16, 1024, 1024, "cuda"],
-        [16, 1024, 2048, "cuda"],
-        [16, 1024, 3072, "cuda"],
-    ),
-)
+@pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("seq_len", [256, 512, 1024])
+@pytest.mark.parametrize("embed_dim", [1024, 2048, 3072])
+@pytest.mark.parametrize("device", ["cuda"])
 def test_layer_norm_modulation(batch_size, seq_len, embed_dim, device):
     # create data
     x = torch.randn(batch_size, seq_len, embed_dim).to(device)
