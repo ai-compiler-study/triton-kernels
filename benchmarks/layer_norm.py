@@ -22,8 +22,8 @@ from triton_kernels import layer_norm_modulation, layer_norm_modulation_torch, l
 def bench_layer_norm_modulation(batch_size, seq_len, embed_dim, provider, device="cuda"):
     # create data
     x = torch.randn(batch_size, seq_len, embed_dim).to(device)
-    scale = torch.randn(batch_size, embed_dim).to(device)
-    shift = torch.randn(batch_size, embed_dim).to(device)
+    scale = torch.randn(batch_size, 1, embed_dim).to(device)
+    shift = torch.randn(batch_size, 1, embed_dim).to(device)
 
     def y_fwd():
         if provider == "triton":

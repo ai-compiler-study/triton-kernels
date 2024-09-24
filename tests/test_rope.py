@@ -11,9 +11,9 @@ from triton_kernels import apply_rope, apply_rope_torch
 @pytest.mark.parametrize("device", ["cuda"])
 def test_apply_rope(batch_size, num_heads, seq_len, head_dim, device):
     # create data
-    xq = torch.randn(batch_size, num_heads, seq_len, head_dim).to(device)
-    xk = torch.randn(batch_size, num_heads, seq_len, head_dim).to(device)
-    freqs_cis = torch.randn(1, 1, seq_len, head_dim // 2, 2, 2).to(device)
+    xq = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    xk = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    freqs_cis = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
     # forward pass
     q_tri, k_tri = apply_rope(xq, xk, freqs_cis)
     q_ref, k_ref = apply_rope_torch(xq, xk, freqs_cis)

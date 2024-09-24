@@ -116,6 +116,39 @@ def _rms_norm_fwd(
     tl.store(Y + cols, y, mask=mask)
 
 
+@triton.jit
+def _rms_norm_bwd(
+    dY,
+    dX,
+    dW,
+    X,
+    W,
+    Rstd,
+    stride,
+    N,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(0)
+    X += row * stride
+    dY += row * stride
+    dX += row * stride
+    dW += row * stride
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
+    dy = tl.load(dY + cols, mask=mask, other=0.0)
+    x = tl.load(X + cols, mask=mask, other=0.0)
+    w = tl.load(W + cols, mask=mask, other=0.0)
+    rstd = tl.load(Rstd + row)
+
+    m = dy * w
+    dx = rstd * m
+    dx += rstd * -(1 / N) * rstd * rstd * tl.sum(m * x, axis=0) * x
+    dw = dy * (x * rstd)
+
+    tl.store(dX + cols, dx, mask=mask)
+    tl.store(dW + cols, dw, mask=mask)
+
+
 class _rms_norm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: torch.Tensor, scale: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -137,16 +170,31 @@ class _rms_norm(torch.autograd.Function):
             num_warps=num_warps,
             num_ctas=1,
         )
-        ctx.save_for_backward(x, scale, rstd)
+        ctx.save_for_backward(x_arg, scale, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
-        ctx.eps = eps
         return y
 
     def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
-        # TODO: implement backward pass
-        x, s, r = ctx.saved_tensors
-        return x, s, None
+        dx = torch.empty_like(dy)
+        dy_arg = dy.view(-1, dy.shape[-1])
+        M, N = dy_arg.shape
+        x, w, r = ctx.saved_tensors
+        dw = torch.empty_like(x)
+        _rms_norm_bwd[(M,)](
+            dy_arg,
+            dx,
+            dw,
+            x,
+            w,
+            r,
+            x.stride(0),
+            N,
+            BLOCK_SIZE=ctx.BLOCK_SIZE,
+            num_warps=ctx.num_warps,
+        )
+        dw = torch.sum(dw, dim=0)
+        return dx, dw, None
 
 
 rms_norm = _rms_norm.apply
