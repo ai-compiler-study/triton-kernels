@@ -199,10 +199,7 @@ class SingleStreamBlock(nn.Module):
         q, k = self.norm(q, k, v)
 
         # compute attention
-        q, k = apply_rope(q, k, pe)
-        attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-        attn = rearrange(attn, "B H L D -> B L (H D)")
-
+        attn = attention(q, k, v, pe=pe)
         # compute activation in mlp stream, cat again and run second linear layer
         output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
         return x + mod.gate * output
@@ -233,7 +230,7 @@ class SingleStreamBlockTriton(nn.Module):
         # proj and mlp_out
         self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size)
 
-        self.norm = QKNorm(head_dim)
+        self.norm = tk.QKNorm(head_dim)
 
         self.hidden_size = hidden_size
         self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -241,17 +238,16 @@ class SingleStreamBlockTriton(nn.Module):
         self.mlp_act = nn.GELU(approximate="tanh")
         self.modulation = Modulation(hidden_size, double=False)
 
-    @torch.compile
     def forward(self, x: Tensor, vec: Tensor, pe: Tensor) -> Tensor:
         mod, _ = self.modulation(vec)
-        x_mod = (1 + mod.scale) * self.pre_norm(x) + mod.shift
+        x_mod = tk.layer_norm_modulation_torch(x, mod.scale, mod.shift)
         qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
 
         q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
         q, k = self.norm(q, k, v)
 
         # compute attention
-        q, k = apply_rope(q, k, pe)
+        q, k = tk.apply_rope(q, k, pe)
         attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
         attn = rearrange(attn, "B H L D -> B L (H D)")
 
@@ -266,7 +262,7 @@ if __name__ == "__main__":
     mlp_ratio = 4.0
     head_dim = hidden_size // num_heads
 
-    batch_size = 1
+    batch_size = 3
     seq_len = 4336
 
     device = "cuda"
@@ -285,9 +281,9 @@ if __name__ == "__main__":
     block = block.to(device)
     block_triton = block_triton.to(device)
 
-    x = torch.randn(batch_size, seq_len, hidden_size).to(device)
-    vec = torch.randn(batch_size, hidden_size).to(device)
-    pe = torch.randn(batch_size, 1, seq_len, head_dim // 2, 2, 2).to(device)
+    x = torch.randn([batch_size, seq_len, hidden_size], device=device)
+    vec = torch.randn([batch_size, hidden_size], device=device)
+    pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
     out = block(x=x, vec=vec, pe=pe)
     out_triton = block_triton(x=x, vec=vec, pe=pe)
@@ -319,4 +315,4 @@ if __name__ == "__main__":
         out_compiled = block_triton(x=x, vec=vec, pe=pe)
     end.record()
     torch.cuda.synchronize()
-    print(f"compiled block time: {start.elapsed_time(end):.2f} ms")
+    print(f"  triton block time: {start.elapsed_time(end):.2f} ms")

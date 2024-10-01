@@ -258,7 +258,7 @@ if __name__ == "__main__":
     mlp_ratio = 4.0
     head_dim = hidden_size // num_heads
 
-    batch_size = 1
+    batch_size = 3
     seq_len = 4336
 
     device = "cuda"
@@ -277,9 +277,9 @@ if __name__ == "__main__":
     block = block.to(device)
     block_compiled = block_compiled.to(device)
 
-    x = torch.randn(batch_size, seq_len, hidden_size).to(device)
-    vec = torch.randn(batch_size, hidden_size).to(device)
-    pe = torch.randn(batch_size, 1, seq_len, head_dim // 2, 2, 2).to(device)
+    x = torch.randn([batch_size, seq_len, hidden_size], device=device)
+    vec = torch.randn([batch_size, hidden_size], device=device)
+    pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
     out = block(x=x, vec=vec, pe=pe)
     out_compiled = block_compiled(x=x, vec=vec, pe=pe)

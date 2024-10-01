@@ -12,15 +12,15 @@ pip install -e .[testing]
 pip install matplotlib pandas
 ```
 
+### Tests
+```bash
+python -m pytest
+```
+
 ### Benchmarks
 - LayerNorm + Modulation Kernel
   - `python ./benchmarks/layer_norm.py`
 - RMSNorm Kernel
   - `python ./benchmarks/rms_norm.py`
 - RoPE Kernel
-  - `python ./benchmakrs/rope_test.py`
-
-### Tests
-```bash
-python -m pytest
-```
+  - `python ./benchmarks/rope_test.py`
