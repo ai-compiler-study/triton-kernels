@@ -6,6 +6,8 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 
+import triton_kernels as tk
+
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     q, k = apply_rope(q, k, pe)
@@ -197,13 +199,16 @@ class SingleStreamBlock(nn.Module):
         q, k = self.norm(q, k, v)
 
         # compute attention
-        attn = attention(q, k, v, pe=pe)
+        q, k = apply_rope(q, k, pe)
+        attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        attn = rearrange(attn, "B H L D -> B L (H D)")
+
         # compute activation in mlp stream, cat again and run second linear layer
         output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
         return x + mod.gate * output
 
 
-class SingleStreamBlockCompiled(nn.Module):
+class SingleStreamBlockTriton(nn.Module):
     """
     A DiT block with parallel linear layers as described in
     https://arxiv.org/abs/2302.05442 and adapted modulation interface.
@@ -246,7 +251,10 @@ class SingleStreamBlockCompiled(nn.Module):
         q, k = self.norm(q, k, v)
 
         # compute attention
-        attn = attention(q, k, v, pe=pe)
+        q, k = apply_rope(q, k, pe)
+        attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        attn = rearrange(attn, "B H L D -> B L (H D)")
+
         # compute activation in mlp stream, cat again and run second linear layer
         output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
         return x + mod.gate * output
@@ -268,23 +276,23 @@ if __name__ == "__main__":
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
     )
-    block_compiled = SingleStreamBlockCompiled(
+    block_triton = SingleStreamBlockTriton(
         hidden_size=hidden_size,
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
     )
-    block_compiled.load_state_dict(block.state_dict())
+    block_triton.load_state_dict(block.state_dict())
     block = block.to(device)
-    block_compiled = block_compiled.to(device)
+    block_triton = block_triton.to(device)
 
     x = torch.randn(batch_size, seq_len, hidden_size).to(device)
     vec = torch.randn(batch_size, hidden_size).to(device)
     pe = torch.randn(batch_size, 1, seq_len, head_dim // 2, 2, 2).to(device)
 
     out = block(x=x, vec=vec, pe=pe)
-    out_compiled = block_compiled(x=x, vec=vec, pe=pe)
+    out_triton = block_triton(x=x, vec=vec, pe=pe)
 
-    torch.testing.assert_close(out, out_compiled, atol=1e-5, rtol=0)
+    torch.testing.assert_close(out, out_triton, atol=1e-5, rtol=0)
 
     # warmup
     warmup_count = 5
@@ -292,7 +300,7 @@ if __name__ == "__main__":
     for i in range(warmup_count):
         out = block(x=x, vec=vec, pe=pe)
     for i in range(warmup_count):
-        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
+        out_compiled = block_triton(x=x, vec=vec, pe=pe)
 
     # run
     run_count = 100
@@ -308,7 +316,7 @@ if __name__ == "__main__":
     start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
     start.record()
     for i in range(run_count):
-        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
+        out_compiled = block_triton(x=x, vec=vec, pe=pe)
     end.record()
     torch.cuda.synchronize()
     print(f"compiled block time: {start.elapsed_time(end):.2f} ms")

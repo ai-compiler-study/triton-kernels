@@ -7,3 +7,4 @@ from triton_kernels.functional import (
     rms_norm_torch_compile,
 )
 from triton_kernels.kernels import apply_rope, layer_norm_modulation, rms_norm
+from triton_kernels.modules import QKNorm, RMSNorm

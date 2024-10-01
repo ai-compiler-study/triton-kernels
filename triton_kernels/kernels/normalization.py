@@ -51,7 +51,7 @@ class _layer_norm_modulation(torch.autograd.Function):
         assert x.shape[-1] == weight.shape[-1] == bias.shape[-1]
         batch_size = x.shape[0]
         y = torch.empty_like(x)
-        x_arg = x.view(-1, x.shape[-1])
+        x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
         seq_len = M // batch_size
         mean = torch.empty((M,), dtype=torch.float32, device=x.device)
@@ -152,9 +152,11 @@ def _rms_norm_bwd(
 class _rms_norm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: torch.Tensor, scale: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        x = x.contiguous()
+        scale = scale.contiguous()
         assert x.shape[-1] == scale.shape[-1]
         y = torch.empty_like(x)
-        x_arg = x.view(-1, x.shape[-1])
+        x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
         rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
         BLOCK_SIZE, num_warps = calculate_settings(N)
@@ -177,7 +179,7 @@ class _rms_norm(torch.autograd.Function):
 
     def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
         dx = torch.empty_like(dy)
-        dy_arg = dy.view(-1, dy.shape[-1])
+        dy_arg = dy.reshape(-1, dy.shape[-1])
         M, N = dy_arg.shape
         x, w, r = ctx.saved_tensors
         dw = torch.empty_like(x)

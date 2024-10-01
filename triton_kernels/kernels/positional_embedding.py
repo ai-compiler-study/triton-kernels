@@ -55,12 +55,14 @@ def _rope_fwd(
 class _rope(torch.autograd.Function):
     @staticmethod
     def forward(ctx, xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
+        xq, xk, freqs_cis = xq.contiguous(), xk.contiguous(), freqs_cis.contiguous()
+
         b, h, s, d = xq.shape
         bh = b * h
 
-        xq_arg = xq.view(-1, s, d)
-        xk_arg = xk.view(-1, s, d)
-        f_arg = freqs_cis.view(-1, s, d // 2, 2, 2)
+        xq_arg = xq.reshape(-1, s, d)
+        xk_arg = xk.reshape(-1, s, d)
+        f_arg = freqs_cis.reshape(-1, s, d // 2, 2, 2)
 
         xq_out = torch.empty_like(xq)
         xk_out = torch.empty_like(xk)

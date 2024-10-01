@@ -21,8 +21,8 @@ from triton_kernels import rms_norm, rms_norm_torch, rms_norm_torch_compile
 )
 def bench_rms_norm(batch_size, num_heads, seq_len, head_dim, provider, device="cuda"):
     # create data
-    x = torch.randn(batch_size, num_heads, seq_len, head_dim).to(device)
-    scale = torch.randn(head_dim).to(device)
+    x = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    scale = torch.randn([head_dim], device=device)
 
     def y_fwd():
         if provider == "triton":

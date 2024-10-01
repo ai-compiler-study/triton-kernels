@@ -21,9 +21,9 @@ from triton_kernels import apply_rope, apply_rope_torch, apply_rope_torch_compil
 )
 def bench_apply_rope(batch_size, num_heads, seq_len, head_dim, provider, device="cuda"):
     # create data
-    xq = torch.randn(batch_size, num_heads, seq_len, head_dim).to(device)
-    xk = torch.randn(batch_size, num_heads, seq_len, head_dim).to(device)
-    freqs_cis = torch.randn(1, 1, seq_len, head_dim // 2, 2, 2).to(device)
+    xq = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    xk = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    freqs_cis = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
     def y_fwd():
         if provider == "triton":
