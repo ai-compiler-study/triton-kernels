@@ -1,5 +1,6 @@
 # https://github.com/black-forest-labs/flux
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -16,12 +17,72 @@ def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     return x
 
 
+def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
+    assert dim % 2 == 0
+    scale = torch.arange(0, dim, 2, dtype=torch.float64, device=pos.device) / dim
+    omega = 1.0 / (theta**scale)
+    out = torch.einsum("...n,d->...nd", pos, omega)
+    out = torch.stack([torch.cos(out), -torch.sin(out), torch.sin(out), torch.cos(out)], dim=-1)
+    out = rearrange(out, "b n d (i j) -> b n d i j", i=2, j=2)
+    return out.float()
+
+
 def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
     xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
     xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
     xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
     xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
     return xq_out.reshape(*xq.shape).type_as(xq), xk_out.reshape(*xk.shape).type_as(xk)
+
+
+class EmbedND(nn.Module):
+    def __init__(self, dim: int, theta: int, axes_dim: list[int]):
+        super().__init__()
+        self.dim = dim
+        self.theta = theta
+        self.axes_dim = axes_dim
+
+    def forward(self, ids: Tensor) -> Tensor:
+        n_axes = ids.shape[-1]
+        emb = torch.cat(
+            [rope(ids[..., i], self.axes_dim[i], self.theta) for i in range(n_axes)],
+            dim=-3,
+        )
+
+        return emb.unsqueeze(1)
+
+
+def timestep_embedding(t: Tensor, dim, max_period=10000, time_factor: float = 1000.0):
+    """
+    Create sinusoidal timestep embeddings.
+    :param t: a 1-D Tensor of N indices, one per batch element.
+                      These may be fractional.
+    :param dim: the dimension of the output.
+    :param max_period: controls the minimum frequency of the embeddings.
+    :return: an (N, D) Tensor of positional embeddings.
+    """
+    t = time_factor * t
+    half = dim // 2
+    freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(t.device)
+
+    args = t[:, None].float() * freqs[None]
+    embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+    if torch.is_floating_point(t):
+        embedding = embedding.to(t)
+    return embedding
+
+
+class MLPEmbedder(nn.Module):
+    def __init__(self, in_dim: int, hidden_dim: int):
+        super().__init__()
+        self.in_layer = nn.Linear(in_dim, hidden_dim, bias=True)
+        self.silu = nn.SiLU()
+        self.out_layer = nn.Linear(hidden_dim, hidden_dim, bias=True)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.out_layer(self.silu(self.in_layer(x)))
 
 
 class RMSNorm(torch.nn.Module):
@@ -203,112 +264,15 @@ class SingleStreamBlock(nn.Module):
         return x + mod.gate * output
 
 
-class SingleStreamBlockCompiled(nn.Module):
-    """
-    A DiT block with parallel linear layers as described in
-    https://arxiv.org/abs/2302.05442 and adapted modulation interface.
-    """
-
-    def __init__(
-        self,
-        hidden_size: int,
-        num_heads: int,
-        mlp_ratio: float = 4.0,
-        qk_scale: float | None = None,
-    ):
+class LastLayer(nn.Module):
+    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()
-        self.hidden_dim = hidden_size
-        self.num_heads = num_heads
-        head_dim = hidden_size // num_heads
-        self.scale = qk_scale or head_dim**-0.5
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
-        self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        # qkv and mlp_in
-        self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim)
-        # proj and mlp_out
-        self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size)
-
-        self.norm = QKNorm(head_dim)
-
-        self.hidden_size = hidden_size
-        self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-
-        self.mlp_act = nn.GELU(approximate="tanh")
-        self.modulation = Modulation(hidden_size, double=False)
-
-    @torch.compile
-    def forward(self, x: Tensor, vec: Tensor, pe: Tensor) -> Tensor:
-        mod, _ = self.modulation(vec)
-        x_mod = (1 + mod.scale) * self.pre_norm(x) + mod.shift
-        qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
-
-        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        q, k = self.norm(q, k, v)
-
-        # compute attention
-        attn = attention(q, k, v, pe=pe)
-        # compute activation in mlp stream, cat again and run second linear layer
-        output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
-        return x + mod.gate * output
-
-
-if __name__ == "__main__":
-    hidden_size = 3072
-    num_heads = 24
-    mlp_ratio = 4.0
-    head_dim = hidden_size // num_heads
-
-    batch_size = 3
-    seq_len = 4336
-
-    device = "cuda"
-
-    block = SingleStreamBlock(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        mlp_ratio=mlp_ratio,
-    )
-    block_compiled = SingleStreamBlockCompiled(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        mlp_ratio=mlp_ratio,
-    )
-    block_compiled.load_state_dict(block.state_dict())
-    block = block.to(device)
-    block_compiled = block_compiled.to(device)
-
-    x = torch.randn([batch_size, seq_len, hidden_size], device=device)
-    vec = torch.randn([batch_size, hidden_size], device=device)
-    pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
-
-    out = block(x=x, vec=vec, pe=pe)
-    out_compiled = block_compiled(x=x, vec=vec, pe=pe)
-
-    torch.testing.assert_close(out, out_compiled, atol=1e-5, rtol=0)
-
-    # warmup
-    warmup_count = 5
-
-    for i in range(warmup_count):
-        out = block(x=x, vec=vec, pe=pe)
-    for i in range(warmup_count):
-        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
-
-    # run
-    run_count = 100
-
-    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    start.record()
-    for i in range(run_count):
-        out = block(x=x, vec=vec, pe=pe)
-    end.record()
-    torch.cuda.synchronize()
-    print(f"baseline block time: {start.elapsed_time(end):.2f} ms")
-
-    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    start.record()
-    for i in range(run_count):
-        out_compiled = block_compiled(x=x, vec=vec, pe=pe)
-    end.record()
-    torch.cuda.synchronize()
-    print(f"compiled block time: {start.elapsed_time(end):.2f} ms")
+    def forward(self, x: Tensor, vec: Tensor) -> Tensor:
+        shift, scale = self.adaLN_modulation(vec).chunk(2, dim=1)
+        x = (1 + scale[:, None, :]) * self.norm_final(x) + shift[:, None, :]
+        x = self.linear(x)
+        return x

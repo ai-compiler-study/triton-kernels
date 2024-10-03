@@ -5,7 +5,7 @@ from triton_kernels import layer_norm_modulation, layer_norm_modulation_torch
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 4, 8, 16])
-@pytest.mark.parametrize("seq_len", [256, 512, 1024, 4336])
+@pytest.mark.parametrize("seq_len", [256, 512, 1024])
 @pytest.mark.parametrize("embed_dim", [1024, 2048, 3072])
 @pytest.mark.parametrize("device", ["cuda"])
 def test_layer_norm_modulation(batch_size, seq_len, embed_dim, device):

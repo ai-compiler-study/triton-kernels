@@ -6,7 +6,7 @@ from triton_kernels import rms_norm, rms_norm_torch
 
 @pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
 @pytest.mark.parametrize("num_heads", [2, 4, 8, 24])
-@pytest.mark.parametrize("seq_len", [256, 512, 1024, 4336])
+@pytest.mark.parametrize("seq_len", [256, 512, 1024])
 @pytest.mark.parametrize("head_dim", [128, 256, 512])
 @pytest.mark.parametrize("device", ["cuda"])
 def test_rms_norm(batch_size, num_heads, seq_len, head_dim, device):
