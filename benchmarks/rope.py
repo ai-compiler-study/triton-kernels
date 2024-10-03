@@ -21,25 +21,26 @@ from triton_kernels import apply_rope, apply_rope_torch, apply_rope_torch_compil
 )
 def bench_apply_rope(batch_size, num_heads, seq_len, head_dim, provider, device="cuda"):
     # create data
-    xq = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
-    xk = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
-    freqs_cis = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
+    q = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    k = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
-    def y_fwd():
-        if provider == "triton":
-            return apply_rope(xq, xk, freqs_cis)
-        if provider == "torch_compile":
-            return apply_rope_torch_compile(xq, xk, freqs_cis)
-        if provider == "torch":
-            return apply_rope_torch(xq, xk, freqs_cis)
+    if provider == "triton":
+        fwd = lambda: apply_rope(q, k, pe)
+    elif provider == "torch_compile":
+        fwd = lambda: apply_rope_torch_compile(q, k, pe)
+    elif provider == "torch":
+        fwd = lambda: apply_rope_torch(q, k, pe)
+    else:
+        raise Exception("invalid provider")
 
-    gbps = lambda ms: 2 * xq.numel() * xq.element_size() / ms * 1e-6
-    ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=[0.5, 0.2, 0.8], rep=500)
+    ms, min_ms, max_ms = triton.testing.do_bench(fwd, quantiles=[0.5, 0.2, 0.8])
 
+    gbps = lambda ms: 2 * q.numel() * q.element_size() / ms * 1e-6
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 # Benchmark
-result_dir = "./results"
-os.makedirs(result_dir, exist_ok=True)
-bench_apply_rope.run(save_path=result_dir, print_data=True)
+fwd_dir = "./results/fwd"
+os.makedirs(fwd_dir, exist_ok=True)
+bench_apply_rope.run(print_data=True, save_path=fwd_dir)

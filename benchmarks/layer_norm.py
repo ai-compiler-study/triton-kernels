@@ -25,21 +25,22 @@ def bench_layer_norm_modulation(batch_size, seq_len, embed_dim, provider, device
     scale = torch.randn([batch_size, 1, embed_dim], device=device)
     shift = torch.randn([batch_size, 1, embed_dim], device=device)
 
-    def y_fwd():
-        if provider == "triton":
-            return layer_norm_modulation(x, scale, shift)
-        if provider == "torch_compile":
-            return layer_norm_modulation_torch_compile(x, scale, shift)
-        if provider == "torch":
-            return layer_norm_modulation_torch(x, scale, shift)
+    if provider == "triton":
+        fwd = lambda: layer_norm_modulation(x, scale, shift)
+    elif provider == "torch_compile":
+        fwd = lambda: layer_norm_modulation_torch_compile(x, scale, shift)
+    elif provider == "torch":
+        fwd = lambda: layer_norm_modulation_torch(x, scale, shift)
+    else:
+        raise Exception("invalid provider")
+
+    ms, min_ms, max_ms = triton.testing.do_bench(fwd, quantiles=[0.5, 0.2, 0.8])
 
     gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
-    ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=[0.5, 0.2, 0.8], rep=500)
-
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 # Benchmark
-result_dir = "./results"
-os.makedirs(result_dir, exist_ok=True)
-bench_layer_norm_modulation.run(save_path=result_dir, print_data=True)
+fwd_dir = "./results/fwd"
+os.makedirs(fwd_dir, exist_ok=True)
+bench_layer_norm_modulation.run(print_data=True, save_path=fwd_dir)

@@ -12,7 +12,7 @@ def test_layer_norm_modulation(batch_size, seq_len, embed_dim, device):
     # create data
     x = torch.randn([batch_size, seq_len, embed_dim], device=device)
     scale = torch.randn([batch_size, 1, embed_dim], device=device)
-    shift = torch.randn([batch_size, 1, embed_dim], device=device)
+    shift = torch.randn_like(scale)
     # forward pass
     y_tri = layer_norm_modulation(x, scale, shift)
     y_ref = layer_norm_modulation_torch(x, scale, shift)

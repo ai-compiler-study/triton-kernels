@@ -14,7 +14,7 @@ def test_rms_norm(batch_size, num_heads, seq_len, head_dim, device):
     # create data
     x = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
     w = torch.randn([head_dim], device=device)
-    dy = torch.randn([batch_size, num_heads, seq_len, head_dim], device=device)
+    dy = torch.randn_like(x)
     x.requires_grad_(True)
     w.requires_grad_(True)
 
