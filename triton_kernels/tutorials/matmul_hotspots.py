@@ -273,7 +273,7 @@ def benchmark(M, N, K, provider):
 
     return perf(ms), perf(max_ms), perf(min_ms)
 
-
-proton.start("matmul", backend="cupti_pcsampling", hook="triton")
-benchmark.run(show_plots=True, print_data=True)
-proton.finalize()
+if __name__ == "__main__":
+    proton.start("matmul", backend="cupti_pcsampling", hook="triton")
+    benchmark.run(show_plots=True, print_data=True)
+    proton.finalize()
