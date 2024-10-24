@@ -1,5 +1,5 @@
 # Triton Kernels
-Triton kernels for [Stable Diffusion 3](https://arxiv.org/abs/2403.03206) and [Flux](https://github.com/black-forest-labs/flux)
+Triton kernels for [Flux](https://github.com/black-forest-labs/flux)
 
 ### Installation
 ```bash

@@ -26,6 +26,7 @@ setup(
         "numpy",
         "torch",
         "triton>=2.2.0",
+        "einops",
     ],
     extras_require={
         "linting": [

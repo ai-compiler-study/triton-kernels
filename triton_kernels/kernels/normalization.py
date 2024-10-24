@@ -93,27 +93,27 @@ def _rms_norm_fwd(
     Y,  # pointer to the output
     W,  # pointer to the weights
     Rstd,  # pointer to the 1/std
-    stride,  # how much to increase the pointer when moving by 1 row
     N,  # number of columns in X
     eps,  # epsilon to avoid division by zero
-    BLOCK_SIZE: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
 ):
-    # Map the program id to the row of X and Y it should compute.
-    row = tl.program_id(0)
-    Y += row * stride
-    X += row * stride
-    # Compute mean
-    cols = tl.arange(0, BLOCK_SIZE)
-    mask = cols < N
-    x = tl.load(X + cols, mask=mask, other=0.0)
-    w = tl.load(W + cols, mask=mask, other=0.0)
-    mean = tl.sum(x * x, axis=0) / N
-    # Compute rrms
+    row_offset = tl.program_id(0) * BLOCK_M
+    row_index = row_offset + tl.arange(0, BLOCK_M)[:, None]
+    col_index = tl.arange(0, BLOCK_N)[None, :]
+    col_mask = col_index < N
+
+    x = tl.load(X + N * row_index + col_index, col_mask, other=0.0)
+    w = tl.load(W + col_index, col_mask, eviction_policy="evict_last", other=0.0)
+
+    xx = x * x
+    xx = tl.broadcast_to(xx, [BLOCK_M, BLOCK_N])
+    mean = tl.sum(xx, axis=1)[:, None] / N
     rstd = tl.rsqrt(mean + eps)
-    tl.store(Rstd + row, rstd)
-    # Normalize and apply linear transformation
     y = x * rstd * w
-    tl.store(Y + cols, y, mask=mask)
+
+    tl.store(Rstd + row_index, rstd)  # for backward
+    tl.store(Y + N * row_index + col_index, y, col_mask)
 
 
 @triton.jit
@@ -159,21 +159,22 @@ class _rms_norm(torch.autograd.Function):
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
         rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
-        BLOCK_SIZE, num_warps = calculate_settings(N)
-        _rms_norm_fwd[(M,)](
+        BLOCK_M = 8
+        BLOCK_N, num_warps = calculate_settings(N)
+        _rms_norm_fwd[(M // BLOCK_M,)](
             x_arg,
             y,
             scale,
             rstd,
-            x_arg.stride(0),
             N,
             eps,
-            BLOCK_SIZE=BLOCK_SIZE,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
             num_warps=num_warps,
             num_ctas=1,
         )
         ctx.save_for_backward(x_arg, scale, rstd)
-        ctx.BLOCK_SIZE = BLOCK_SIZE
+        ctx.BLOCK_SIZE = BLOCK_N
         ctx.num_warps = num_warps
         return y
 
