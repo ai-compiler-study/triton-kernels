@@ -49,7 +49,7 @@ class SingleStreamBlock(nn.Module):
 
     def forward(self, x: Tensor, vec: Tensor, pe: Tensor) -> Tensor:
         mod, _ = self.modulation(vec)
-        x_mod = tk.layer_norm_modulation_torch(x, mod.scale, mod.shift)
+        x_mod = tk.layer_norm_modulation(x, mod.scale, mod.shift)
         qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
 
         q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
@@ -116,13 +116,13 @@ class DoubleStreamBlock(nn.Module):
         txt_mod1, txt_mod2 = self.txt_mod(vec)
 
         # prepare image for attention
-        img_modulated = tk.layer_norm_modulation_torch(img, img_mod1.scale, img_mod1.shift)
+        img_modulated = tk.layer_norm_modulation(img, img_mod1.scale, img_mod1.shift)
         img_qkv = self.img_attn.qkv(img_modulated)
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
         img_q, img_k = self.img_attn.norm(img_q, img_k, img_v)
 
         # prepare txt for attention
-        txt_modulated = tk.layer_norm_modulation_torch(txt, txt_mod1.scale, txt_mod1.shift)
+        txt_modulated = tk.layer_norm_modulation(txt, txt_mod1.scale, txt_mod1.shift)
         txt_qkv = self.txt_attn.qkv(txt_modulated)
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
         txt_q, txt_k = self.txt_attn.norm(txt_q, txt_k, txt_v)

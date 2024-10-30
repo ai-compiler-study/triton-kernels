@@ -49,6 +49,10 @@ class _layer_norm_modulation(torch.autograd.Function):
     def forward(ctx, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps=1e-5) -> torch.Tensor:
         assert x.shape[0] == weight.shape[0] == bias.shape[0]
         assert x.shape[-1] == weight.shape[-1] == bias.shape[-1]
+        # TODO: handle non-contiguous tensors
+        x = x.contiguous()
+        weight = weight.contiguous()
+        bias = bias.contiguous()
         batch_size = x.shape[0]
         y = torch.empty_like(x)
         x_arg = x.reshape(-1, x.shape[-1])
