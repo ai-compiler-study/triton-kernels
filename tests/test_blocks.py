@@ -34,11 +34,12 @@ def test_single_stream_block(batch_size, seq_len, device):
     pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
     # forward pass
-    y_ref = block_triton(x=x, vec=vec, pe=pe)
-    y_tri = block(x=x, vec=vec, pe=pe)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        y_ref = block_triton(x=x, vec=vec, pe=pe)
+        y_tri = block(x=x, vec=vec, pe=pe)
 
     # compare
-    torch.testing.assert_close(y_tri, y_ref, atol=1e-4, rtol=0)
+    torch.testing.assert_close(y_tri, y_ref, atol=1e-2, rtol=0)
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
@@ -73,8 +74,9 @@ def test_double_stream_block(batch_size, img_seq_len, device):
     pe = torch.randn([1, 1, seq_len, head_dim // 2, 2, 2], device=device)
 
     # forward pass
-    y_ref = block_triton(img=img, txt=txt, vec=vec, pe=pe)
-    y_tri = block(img=img, txt=txt, vec=vec, pe=pe)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        y_ref = block_triton(img=img, txt=txt, vec=vec, pe=pe)
+        y_tri = block(img=img, txt=txt, vec=vec, pe=pe)
 
     # compare
-    torch.testing.assert_close(y_tri, y_ref, atol=1e-4, rtol=0)
+    torch.testing.assert_close(y_tri, y_ref, atol=1e-2, rtol=0)

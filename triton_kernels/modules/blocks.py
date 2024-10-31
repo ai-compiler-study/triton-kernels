@@ -9,7 +9,7 @@ from triton_kernels.flux.layers import Modulation
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     q, k = tk.apply_rope(q, k, pe)
-    x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    x = tk.scaled_dot_product_attention(q, k, v)
     x = rearrange(x, "B H L D -> B L (H D)")
     return x
 
@@ -137,9 +137,9 @@ class DoubleStreamBlock(nn.Module):
 
         # calculate the img bloks
         img = img + img_mod1.gate * self.img_attn.proj(img_attn)
-        img = img + img_mod2.gate * self.img_mlp((1 + img_mod2.scale) * self.img_norm2(img) + img_mod2.shift)
+        img = img + img_mod2.gate * self.img_mlp(tk.layer_norm_modulation(img, img_mod2.scale, img_mod2.shift))
 
         # calculate the txt bloks
         txt = txt + txt_mod1.gate * self.txt_attn.proj(txt_attn)
-        txt = txt + txt_mod2.gate * self.txt_mlp((1 + txt_mod2.scale) * self.txt_norm2(txt) + txt_mod2.shift)
+        txt = txt + txt_mod2.gate * self.txt_mlp(tk.layer_norm_modulation(txt, txt_mod2.scale, txt_mod2.shift))
         return img, txt

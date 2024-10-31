@@ -10,7 +10,7 @@ setup(
     name="triton-kernels",
     version="0.1.0",
     author="Sinjin Jeong",
-    description="Triton kernels for SD3 and Flux",
+    description="Triton kernels for Flux",
     license="MIT",
     long_description=long_description,
     long_description_content_type="text/markdown",
