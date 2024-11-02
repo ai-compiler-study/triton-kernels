@@ -52,49 +52,31 @@ def _rope_fwd(
     tl.store(ok_ptrs, ok.reshape(BLOCK_SIZE * 2), mask=col_offsets2 < d)
 
 
-class _rope(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
-        xq, xk, freqs_cis = xq.contiguous(), xk.contiguous(), freqs_cis.contiguous()
+def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
+    xq, xk, freqs_cis = xq.contiguous(), xk.contiguous(), freqs_cis.contiguous()
 
-        b, h, s, d = xq.shape
-        bh = b * h
+    b, h, s, d = xq.shape
+    bh = b * h
 
-        xq_arg = xq.reshape(-1, s, d)
-        xk_arg = xk.reshape(-1, s, d)
-        f_arg = freqs_cis.reshape(-1, s, d // 2, 2, 2)
+    xq_arg = xq.reshape(-1, s, d)
+    xk_arg = xk.reshape(-1, s, d)
+    f_arg = freqs_cis.reshape(-1, s, d // 2, 2, 2)
 
-        xq_out = torch.empty_like(xq)
-        xk_out = torch.empty_like(xk)
+    xq_out = torch.empty_like(xq)
+    xk_out = torch.empty_like(xk)
 
-        BLOCK_SIZE, num_warps = calculate_settings(d // 2)
+    BLOCK_SIZE, num_warps = calculate_settings(d // 2)
 
-        _rope_fwd[(bh, s)](
-            xq_arg,
-            xk_arg,
-            f_arg,
-            xq_out,
-            xk_out,
-            xq_arg.stride(0),
-            d,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=num_warps,
-        )
+    _rope_fwd[(bh, s)](
+        xq_arg,
+        xk_arg,
+        f_arg,
+        xq_out,
+        xk_out,
+        xq_arg.stride(0),
+        d,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
+    )
 
-        ctx.save_for_backward(freqs_cis)
-        ctx.BLOCK_SIZE = BLOCK_SIZE
-        ctx.num_warps = num_warps
-
-        return xq_out, xk_out
-
-    def backward(
-        ctx,
-        dxq: Tensor,
-        dxk: Tensor,
-    ) -> Tensor:
-        # TODO: implement backward pass
-        (freqs_cis,) = ctx.saved_tensors
-        return dxq, dxk, None
-
-
-apply_rope = _rope.apply
+    return xq_out, xk_out

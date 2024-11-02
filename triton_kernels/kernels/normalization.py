@@ -44,51 +44,37 @@ def _layer_norm_modulation_fwd(
     tl.store(Y + cols, y, mask=mask)
 
 
-class _layer_norm_modulation(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps=1e-5) -> torch.Tensor:
-        assert x.shape[0] == weight.shape[0] == bias.shape[0]
-        assert x.shape[-1] == weight.shape[-1] == bias.shape[-1]
-        # TODO: handle non-contiguous tensors
-        x = x.contiguous()
-        weight = weight.contiguous()
-        bias = bias.contiguous()
-        batch_size = x.shape[0]
-        y = torch.empty_like(x)
-        x_arg = x.reshape(-1, x.shape[-1])
-        M, N = x_arg.shape
-        seq_len = M // batch_size
-        mean = torch.empty((M,), dtype=torch.float32, device=x.device)
-        rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
-        BLOCK_SIZE, num_warps = calculate_settings(N)
-        _layer_norm_modulation_fwd[(M,)](
-            x_arg,
-            y,
-            weight,
-            bias,
-            mean,
-            rstd,
-            x_arg.stride(0),
-            seq_len,
-            N,
-            eps,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=num_warps,
-            num_ctas=1,
-        )
-        ctx.save_for_backward(x, weight, bias, mean, rstd)
-        ctx.BLOCK_SIZE = BLOCK_SIZE
-        ctx.num_warps = num_warps
-        ctx.eps = eps
-        return y
-
-    def backward(ctx, dy: torch.Tensor) -> torch.Tensor:
-        # TODO: implement backward pass
-        x, w, b, m, v = ctx.saved_tensors
-        return x, None, w, b, None
-
-
-layer_norm_modulation = _layer_norm_modulation.apply
+def layer_norm_modulation(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps=1e-5) -> torch.Tensor:
+    assert x.shape[0] == weight.shape[0] == bias.shape[0]
+    assert x.shape[-1] == weight.shape[-1] == bias.shape[-1]
+    # TODO: handle non-contiguous tensors
+    x = x.contiguous()
+    weight = weight.contiguous()
+    bias = bias.contiguous()
+    batch_size = x.shape[0]
+    y = torch.empty_like(x)
+    x_arg = x.reshape(-1, x.shape[-1])
+    M, N = x_arg.shape
+    seq_len = M // batch_size
+    mean = torch.empty((M,), dtype=torch.float32, device=x.device)
+    rstd = torch.empty((M,), dtype=torch.float32, device=x.device)
+    BLOCK_SIZE, num_warps = calculate_settings(N)
+    _layer_norm_modulation_fwd[(M,)](
+        x_arg,
+        y,
+        weight,
+        bias,
+        mean,
+        rstd,
+        x_arg.stride(0),
+        seq_len,
+        N,
+        eps,
+        BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
+        num_ctas=1,
+    )
+    return y
 
 
 @triton.jit
