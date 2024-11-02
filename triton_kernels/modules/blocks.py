@@ -1,10 +1,11 @@
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 from einops import rearrange
 from torch import Tensor
 
 import triton_kernels as tk
-from triton_kernels.flux.layers import Modulation
 
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
@@ -12,6 +13,53 @@ def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     x = tk.scaled_dot_product_attention(q, k, v)
     x = rearrange(x, "B H L D -> B L (H D)")
     return x
+
+
+class Linear(nn.Linear):
+    def forward(self, input: Tensor) -> Tensor:
+        return tk.linear(input, self.weight, self.bias)
+
+
+class SelfAttention(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+
+        self.qkv = Linear(dim, dim * 3, bias=qkv_bias)
+        self.norm = tk.QKNorm(head_dim)
+        self.proj = Linear(dim, dim)
+
+    def forward(self, x: Tensor, pe: Tensor) -> Tensor:
+        qkv = self.qkv(x)
+        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        q, k = self.norm(q, k, v)
+        x = attention(q, k, v, pe=pe)
+        x = self.proj(x)
+        return x
+
+
+@dataclass
+class ModulationOut:
+    shift: Tensor
+    scale: Tensor
+    gate: Tensor
+
+
+class Modulation(nn.Module):
+    def __init__(self, dim: int, double: bool):
+        super().__init__()
+        self.is_double = double
+        self.multiplier = 6 if double else 3
+        self.lin = Linear(dim, self.multiplier * dim, bias=True)
+
+    def forward(self, vec: Tensor) -> tuple[ModulationOut, ModulationOut | None]:
+        out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(self.multiplier, dim=-1)
+
+        return (
+            ModulationOut(*out[:3]),
+            ModulationOut(*out[3:]) if self.is_double else None,
+        )
 
 
 class SingleStreamBlock(nn.Module):
@@ -35,9 +83,9 @@ class SingleStreamBlock(nn.Module):
 
         self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
         # qkv and mlp_in
-        self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim)
+        self.linear1 = Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim)
         # proj and mlp_out
-        self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size)
+        self.linear2 = Linear(hidden_size + self.mlp_hidden_dim, hidden_size)
 
         self.norm = tk.QKNorm(head_dim)
 
@@ -63,25 +111,6 @@ class SingleStreamBlock(nn.Module):
         return x + mod.gate * output
 
 
-class SelfAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.norm = tk.QKNorm(head_dim)
-        self.proj = nn.Linear(dim, dim)
-
-    def forward(self, x: Tensor, pe: Tensor) -> Tensor:
-        qkv = self.qkv(x)
-        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        q, k = self.norm(q, k, v)
-        x = attention(q, k, v, pe=pe)
-        x = self.proj(x)
-        return x
-
-
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
         super().__init__()
@@ -95,9 +124,9 @@ class DoubleStreamBlock(nn.Module):
 
         self.img_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.img_mlp = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden_dim, bias=True),
+            Linear(hidden_size, mlp_hidden_dim, bias=True),
             nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden_dim, hidden_size, bias=True),
+            Linear(mlp_hidden_dim, hidden_size, bias=True),
         )
 
         self.txt_mod = Modulation(hidden_size, double=True)
@@ -106,9 +135,9 @@ class DoubleStreamBlock(nn.Module):
 
         self.txt_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.txt_mlp = nn.Sequential(
-            nn.Linear(hidden_size, mlp_hidden_dim, bias=True),
+            Linear(hidden_size, mlp_hidden_dim, bias=True),
             nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden_dim, hidden_size, bias=True),
+            Linear(mlp_hidden_dim, hidden_size, bias=True),
         )
 
     def forward(self, img: Tensor, txt: Tensor, vec: Tensor, pe: Tensor) -> tuple[Tensor, Tensor]:

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from triton_kernels.kernels.attention import scaled_dot_product_attention
+from triton_kernels import scaled_dot_product_attention
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 4])
