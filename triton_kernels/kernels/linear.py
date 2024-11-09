@@ -3,6 +3,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra.libdevice import tanh
 
 
 def _linear_launch_metadata(grid, kernel, args):
@@ -16,6 +17,15 @@ def _linear_launch_metadata(grid, kernel, args):
     ret[f"flops{bytes_per_elem * 8}"] = 2.0 * M * N * K
     ret["bytes"] = bytes_per_elem * (M * K + N * K + M * N)
     return ret
+
+
+@triton.jit
+def gelu(x):
+    c = 0.7978845608028654  # sqrt(2 / pi)
+    x_cubed = x * x * x
+    tanh_arg = c * (x + 0.044715 * x_cubed)
+    tanh_result = tanh(tanh_arg)
+    return 0.5 * x * (1 + tanh_result)
 
 
 @triton.jit(launch_metadata=_linear_launch_metadata)
@@ -38,6 +48,7 @@ def _linear_fwd(
     BLOCK_SIZE_N: tl.constexpr,  #
     BLOCK_SIZE_K: tl.constexpr,  #
     GROUP_SIZE_M: tl.constexpr,  #
+    ACTIVATION: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -80,6 +91,9 @@ def _linear_fwd(
 
     c = accumulator.to(tl.bfloat16)
 
+    if ACTIVATION == "GELU":
+        c = gelu(c)
+
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -87,7 +101,7 @@ def _linear_fwd(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-def linear(x, w, b):
+def linear(x, w, b, activation=""):
     configs = {
         torch.bfloat16: {
             "BLOCK_SIZE_M": 128,
@@ -131,6 +145,7 @@ def linear(x, w, b):
         GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],
         num_stages=configs[dtype]["num_stages"],
         num_warps=configs[dtype]["num_warps"],
+        ACTIVATION=activation,
     )
     y = y.reshape(*input_shape[:-1], -1)
     return y

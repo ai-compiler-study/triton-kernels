@@ -9,7 +9,7 @@ from triton_kernels import linear
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=["seq_len"],
-        x_vals=[256 * i for i in range(1, 17)],
+        x_vals=[64 * i for i in range(1, 33)],
         line_arg="provider",
         line_vals=["triton", "torch"],
         line_names=["triton", "torch"],

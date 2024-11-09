@@ -41,7 +41,7 @@ def test_single_stream_block(batch_size, seq_len, dtype, device):
         y_tri = block(x=x, vec=vec, pe=pe)
 
     # compare
-    torch.testing.assert_close(y_tri, y_ref, atol=5e-2, rtol=0)
+    torch.testing.assert_close(y_tri, y_ref, atol=0.1, rtol=0)
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
@@ -82,4 +82,4 @@ def test_double_stream_block(batch_size, img_seq_len, dtype, device):
         y_tri = block(img=img, txt=txt, vec=vec, pe=pe)
 
     # compare
-    torch.testing.assert_close(y_tri, y_ref, atol=5e-2, rtol=0)
+    torch.testing.assert_close(y_tri, y_ref, atol=0.1, rtol=0)

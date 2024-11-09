@@ -20,6 +20,11 @@ class Linear(nn.Linear):
         return tk.linear(input, self.weight, self.bias)
 
 
+class LinearGELU(nn.Linear):
+    def forward(self, input: Tensor) -> Tensor:
+        return tk.linear(input, self.weight, self.bias, activation="GELU")
+
+
 class SelfAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
         super().__init__()
@@ -62,6 +67,14 @@ class Modulation(nn.Module):
         )
 
 
+def MLP(hidden_size: int, mlp_hidden_dim: int, bias: bool = True):
+    return nn.Sequential(
+        LinearGELU(hidden_size, mlp_hidden_dim, bias=bias),
+        nn.Identity(),
+        Linear(mlp_hidden_dim, hidden_size, bias=bias),
+    )
+
+
 class SingleStreamBlock(nn.Module):
     """
     A DiT block with parallel linear layers as described in
@@ -90,7 +103,6 @@ class SingleStreamBlock(nn.Module):
         self.norm = tk.QKNorm(head_dim)
 
         self.hidden_size = hidden_size
-        self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
 
         self.mlp_act = nn.GELU(approximate="tanh")
         self.modulation = Modulation(hidden_size, double=False)
@@ -119,26 +131,12 @@ class DoubleStreamBlock(nn.Module):
         self.num_heads = num_heads
         self.hidden_size = hidden_size
         self.img_mod = Modulation(hidden_size, double=True)
-        self.img_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.img_attn = SelfAttention(dim=hidden_size, num_heads=num_heads, qkv_bias=qkv_bias)
-
-        self.img_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.img_mlp = nn.Sequential(
-            Linear(hidden_size, mlp_hidden_dim, bias=True),
-            nn.GELU(approximate="tanh"),
-            Linear(mlp_hidden_dim, hidden_size, bias=True),
-        )
+        self.img_mlp = MLP(hidden_size, mlp_hidden_dim)
 
         self.txt_mod = Modulation(hidden_size, double=True)
-        self.txt_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.txt_attn = SelfAttention(dim=hidden_size, num_heads=num_heads, qkv_bias=qkv_bias)
-
-        self.txt_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.txt_mlp = nn.Sequential(
-            Linear(hidden_size, mlp_hidden_dim, bias=True),
-            nn.GELU(approximate="tanh"),
-            Linear(mlp_hidden_dim, hidden_size, bias=True),
-        )
+        self.txt_mlp = MLP(hidden_size, mlp_hidden_dim)
 
     def forward(self, img: Tensor, txt: Tensor, vec: Tensor, pe: Tensor) -> tuple[Tensor, Tensor]:
         img_mod1, img_mod2 = self.img_mod(vec)
