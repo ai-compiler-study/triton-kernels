@@ -33,21 +33,21 @@ def _linear_fwd(
     a_ptr,
     b_ptr,
     c_ptr,
-    bias_ptr,  #
+    bias_ptr,
     M,
     N,
-    K,  #
+    K,
     stride_am,
-    stride_ak,  #
+    stride_ak,
     stride_bk,
-    stride_bn,  #
+    stride_bn,
     stride_cm,
-    stride_cn,  #
-    HAS_BIAS: tl.constexpr,  #
-    BLOCK_SIZE_M: tl.constexpr,  #
-    BLOCK_SIZE_N: tl.constexpr,  #
-    BLOCK_SIZE_K: tl.constexpr,  #
-    GROUP_SIZE_M: tl.constexpr,  #
+    stride_cn,
+    HAS_BIAS: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
